@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Employee Shift Scheduler</title>
+<style>
+  body { font-family: Arial, sans-serif; margin: 30px; }
+  h1 { font-size: 20px; }
+  h2 { font-size: 16px; margin-top: 30px; }
+  label { margin-right: 6px; }
+  select, input { margin-right: 12px; }
+  table { border-collapse: collapse; margin-top: 10px; }
+  th, td { border: 1px solid #999; padding: 6px 10px; text-align: left; }
+</style>
+</head>
+<body>
+
+<h1>Employee Shift Scheduler</h1>
+<p>Rules: max 5 days/week per employee, minimum 2 employees per shift, a shift is full at 3 employees.</p>
+
+<h2>1. Add Employee</h2>
+<label for="employee-name">Name:</label>
+<input type="text" id="employee-name">
+<button onclick="addEmployee()">Add Employee</button>
+<p id="employee-list"></p>
+
+<h2>2. Add Shift Preference</h2>
+<label for="pref-employee">Employee:</label>
+<select id="pref-employee"></select>
+<label for="pref-day">Day:</label>
+<select id="pref-day"></select>
+<label for="pref-shift">Shift:</label>
+<select id="pref-shift"></select>
+<button onclick="addPreference()">Add Preference</button>
+<p id="preference-list"></p>
+
+<h2>3. Generate Schedule</h2>
+<button onclick="runSchedule()">Generate Schedule</button>
+<div id="schedule-output"></div>
+
+<script>
+  // ---- Data ----
+  const DAYS = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"];
+  const SHIFTS = ["MORNING", "AFTERNOON", "EVENING"];
+
+  // Rules from the assignment.
+  const MAX_DAYS_PER_WEEK = 5; // an employee works at most 5 days
+  const MIN_PER_SHIFT = 2;     // each shift needs at least 2 people
+  const MAX_PER_SHIFT = 3;     // a shift is "full" once it hits this many
+
+  // In-memory storage (no database, just arrays).
+  const employeeNames = [];
+  const preferences = [];
+  let assignments = [];
+
+  // ---- Page setup ----
+  document.getElementById("pref-day").innerHTML =
+    DAYS.map(d => "<option>" + d + "</option>").join("");
+  document.getElementById("pref-shift").innerHTML =
+    SHIFTS.map(s => "<option>" + s + "</option>").join("");
+
+  // ---- Input handling ----
+  function addEmployee() {
+    const name = document.getElementById("employee-name").value.trim();
+    if (name === "") return;
+
+    employeeNames.push(name);
+    document.getElementById("employee-name").value = "";
+
+    document.getElementById("employee-list").textContent =
+      "Employees: " + employeeNames.join(", ");
+
+    document.getElementById("pref-employee").innerHTML =
+      employeeNames.map(n => "<option>" + n + "</option>").join("");
+  }
+
+  function addPreference() {
+    const name = document.getElementById("pref-employee").value;
+    const day = document.getElementById("pref-day").value;
+    const shift = document.getElementById("pref-shift").value;
+    if (!name) return;
+
+    preferences.push({ employeeName: name, dayOfWeek: day, shiftType: shift });
+
+    document.getElementById("preference-list").innerHTML =
+      preferences.map(p => p.employeeName + " - " + p.dayOfWeek + " " + p.shiftType).join("<br>");
+  }
+
+  // ---- Scheduling logic ----
+  function runSchedule() {
+    assignments = generateSchedule();
+    showSchedule();
+  }
+
+  function generateSchedule() {
+    const schedule = [];
+
+    // STEP 1: try to honor each preference.
+    for (const pref of preferences) {
+      const name = pref.employeeName;
+      const day = pref.dayOfWeek;
+      const wanted = pref.shiftType;
+
+      if (daysWorked(schedule, name) >= MAX_DAYS_PER_WEEK) {
+        continue;
+      }
+      if (isWorkingOn(schedule, name, day)) {
+        continue;
+      }
+
+      // Try the preferred shift; if it's full, resolve the conflict.
+      if (!tryAssign(schedule, name, day, wanted)) {
+        resolveConflict(schedule, name, day, wanted);
+      }
+    }
+
+    // STEP 2: make sure every shift has at least 2 people.
+    for (const day of DAYS) {
+      for (const shift of SHIFTS) {
+        while (countInShift(schedule, day, shift) < MIN_PER_SHIFT) {
+          const filler = pickRandomFreeEmployee(schedule, employeeNames, day);
+          if (filler === null) {
+            break; // nobody left who can work this day
+          }
+          tryAssign(schedule, filler, day, shift);
+        }
+      }
+    }
+
+    return schedule;
+  }
+
+  // Adds the employee to this day/shift if there is room. Returns false if not.
+  function tryAssign(schedule, name, day, shift) {
+    if (isWorkingOn(schedule, name, day)) {
+      return false;
+    }
+    if (daysWorked(schedule, name) >= MAX_DAYS_PER_WEEK) {
+      return false;
+    }
+    if (countInShift(schedule, day, shift) >= MAX_PER_SHIFT) {
+      return false; // shift is full
+    }
+    schedule.push({ employeeName: name, dayOfWeek: day, shiftType: shift });
+    return true;
+  }
+
+  // Preferred shift was full: try the other shifts today, then tomorrow.
+  function resolveConflict(schedule, name, day, wanted) {
+    for (const other of SHIFTS) {
+      if (other !== wanted && tryAssign(schedule, name, day, other)) {
+        return;
+      }
+    }
+    const nextDay = DAYS[(DAYS.indexOf(day) + 1) % DAYS.length];
+    for (const shift of SHIFTS) {
+      if (tryAssign(schedule, name, nextDay, shift)) {
+        return;
+      }
+    }
+  }
+
+  // Picks a random employee who is free on this day and under 5 days worked.
+  function pickRandomFreeEmployee(schedule, employees, day) {
+    const available = [];
+    for (const name of employees) {
+      if (!isWorkingOn(schedule, name, day) && daysWorked(schedule, name) < MAX_DAYS_PER_WEEK) {
+        available.push(name);
+      }
+    }
+    if (available.length === 0) {
+      return null;
+    }
+    return available[Math.floor(Math.random() * available.length)];
+  }
+
+  // How many days this employee is already scheduled for.
+  function daysWorked(schedule, name) {
+    let count = 0;
+    for (const s of schedule) {
+      if (s.employeeName === name) count++;
+    }
+    return count;
+  }
+
+  // Whether this employee already has a shift on this day.
+  function isWorkingOn(schedule, name, day) {
+    for (const s of schedule) {
+      if (s.employeeName === name && s.dayOfWeek === day) return true;
+    }
+    return false;
+  }
+
+  // How many employees are currently in this day/shift slot.
+  function countInShift(schedule, day, shift) {
+    let count = 0;
+    for (const s of schedule) {
+      if (s.dayOfWeek === day && s.shiftType === shift) count++;
+    }
+    return count;
+  }
+
+  // ---- Output ----
+  function showSchedule() {
+    let html = "<table><tr><th>Day</th><th>Morning</th><th>Afternoon</th><th>Evening</th></tr>";
+
+    for (const day of DAYS) {
+      html += "<tr><td>" + day + "</td>";
+      for (const shift of SHIFTS) {
+        const names = assignments
+          .filter(a => a.dayOfWeek === day && a.shiftType === shift)
+          .map(a => a.employeeName)
+          .join(", ");
+        html += "<td>" + (names || "-") + "</td>";
+      }
+      html += "</tr>";
+    }
+
+    html += "</table>";
+    document.getElementById("schedule-output").innerHTML = html;
+  }
+</script>
+</body>
+</html>
