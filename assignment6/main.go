@@ -137,23 +137,30 @@ func processRide(driverID int, request RideRequest, store *RideResultStore) {
 
 func main() {
 	log.SetFlags(log.Ltime)
+	if err := run(); err != nil {
+		log.Fatalf("ride matching run failed: %v", err)
+	}
+}
 
-	rideRequestCount := 20
-	driverCount := 5
+// run executes the full ride-matching pipeline and returns an error instead
+// of exiting directly, so deferred cleanup (closing the result file) always
+// runs, even if a later step fails.
+func run() error {
+	rideRequestCount, driverCount := 20, 5
 
 	queue := NewRideRequestQueue(rideRequestCount)
 	for i := 1; i <= rideRequestCount; i++ {
 		queue.AddTask(RideRequest{ID: i, PickupLocation: fmt.Sprintf("Zone-%d", i)})
 	}
-	queue.Close() // no more tasks will be added; workers exit once drained
+	queue.Close()
 
 	store, err := NewRideResultStore("ride_results.csv")
 	if err != nil {
-		log.Fatalf("failed to initialize result store: %v", err)
+		return fmt.Errorf("failed to initialize result store: %w", err)
 	}
 	defer func() {
-		if err := store.Close(); err != nil {
-			log.Printf("error closing result store: %v", err)
+		if closeErr := store.Close(); closeErr != nil {
+			log.Printf("error closing result store: %v", closeErr)
 		}
 	}()
 
@@ -162,7 +169,8 @@ func main() {
 		wg.Add(1)
 		go driverWorker(i, queue, store, &wg)
 	}
-
 	wg.Wait()
+
 	fmt.Printf("Processed %d ride requests with %d drivers\n", rideRequestCount, driverCount)
+	return nil
 }
